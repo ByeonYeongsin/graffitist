@@ -40,7 +40,7 @@ parser.add_argument('--meta_path', metavar='PATH', required=False,
           help='path to the metagraph (optional, if not in ckpt_dir)')
 parser.add_argument('--image_size', type=int, default=224, metavar='N',
           help='size of input image (default: 224)')
-parser.add_argument('-b_t', '--tbatch_size_t', type=int, default=24, metavar='N',
+parser.add_argument('-b_t', '--batch_size_t', type=int, default=24, metavar='N',
           help='training mini-batch size (default: 24)')
 parser.add_argument('-b_v', '--batch_size_v', type=int, default=64, metavar='N',
           help='validation mini-batch size (default: 64)')

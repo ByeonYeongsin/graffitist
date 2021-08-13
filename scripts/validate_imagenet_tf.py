@@ -46,7 +46,7 @@ parser.add_argument('--deterministic', dest='deterministic', action='store_true'
 
 # This is to filter out TensorFlow INFO and WARNING logs
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
-# os.environ["CUDA_VISIBLE_DEVICES"]="0" # GPU visible for validation
+os.environ["CUDA_VISIBLE_DEVICES"] = "0, 1"  # GPU visible for validation
 tf.debugging.set_log_Device_placement(True)
 
 # Load python libraries for custom C++/CUDA quantize kernels.
@@ -88,182 +88,185 @@ def validate(val_filenames):
             # Remove any global_step digits for meta path
             meta_path = re.sub('.ckpt-\d+', '.ckpt', ckpt_path) + '.meta'
 
-        with tf.device('/GPU:0'):
-            with tf.compat.v1.Session(graph=tf.Graph()) as sess:
-                # 1) Load from frozen model.pb
-                if tf.io.gfile.exists(args.model_dir) and re.match(".*frozen.*\.pb", args.model_dir):
-                    print("Loading frozen model from '{}'".format(args.model_dir))
-                    graph_def = tf.compat.v1.GraphDef()
-                    with tf.io.gfile.GFile(args.model_dir, 'rb') as f:
-                        graph_def.ParseFromString(f.read())
-                    tf.import_graph_def(graph_def, name='')
+        with tf.compat.v1.Session(graph=tf.Graph()) as sess:
+            # 1) Load from frozen model.pb
+            if tf.io.gfile.exists(args.model_dir) and re.match(".*frozen.*\.pb", args.model_dir):
+                print("load data 1")
+                print("Loading frozen model from '{}'".format(args.model_dir))
+                graph_def = tf.compat.v1.GraphDef()
+                with tf.io.gfile.GFile(args.model_dir, 'rb') as f:
+                    graph_def.ParseFromString(f.read())
+                tf.import_graph_def(graph_def, name='')
 
-                # 2) Load from .ckpt and .pb
-                elif ckpt and tf.io.gfile.exists(ckpt_path+'.index') and tf.io.gfile.exists(args.model_dir) and \
-                        re.match(".*.pb", args.model_dir):
-                    print("Loading model from '{}'".format(args.model_dir))
-                    print("Loading weights from '{}'".format(ckpt_path))
-                    graph_def = tf.compat.v1.GraphDef()
-                    with tf.io.gfile.GFile(args.model_dir, 'rb') as f:
-                        graph_def.ParseFromString(f.read())
-                    tf.import_graph_def(graph_def, name='')
-                    var_list = {}
-                    reader = tf.compat.v1.train.NewReader(ckpt_path)
-                    for key in reader.get_variable_to_shape_map():
-                        # Look for all variables in ckpt that are used by the graph
-                        try:
-                            tensor = sess.graph.get_tensor_by_name(key + ":0")
-                        except KeyError:
-                            # This tensor doesn't exist in the graph (for example it's
-                            # 'global_step' or a similar housekeeping element) so skip it.
-                            continue
-                        var_list[key] = tensor
-                    saver = tf.compat.v1.train.Saver(var_list=var_list)
-                    saver.restore(sess, ckpt_path)
-
-                # 3) Load from .ckpt and .meta
-                elif ckpt and tf.io.gfile.exists(ckpt_path+'.index') and tf.io.gfile.exists(meta_path):
-                    print("Loading model from '{}'".format(meta_path))
-                    print("Loading weights from '{}'".format(ckpt_path))
-                    new_saver = tf.compat.v1.train.import_meta_graph(
-                        meta_path, clear_devices=True)
-                    new_saver.restore(sess, ckpt_path)
-
-                # 4) Load from saved_model.pb and variables
-                elif tf.saved_model.loader.maybe_saved_model_directory(args.model_dir) and \
-                        tf.io.gfile.exists(saved_model_path) and tf.io.gfile.exists(saved_model_var_path):
-                    print("Loading model from '{}'".format(saved_model_path))
-                    print("Loading weights from '{}'".format(
-                        saved_model_var_path))
-                    tf.saved_model.loader.load(sess,
-                                               [tf.saved_model.tag_constants.SERVING],
-                                               args.model_dir)
-
-                else:
-                    raise ValueError("No model found!")
-
-                g = tf.compat.v1.get_default_graph()
-
-                if re.match('.*resnet_v1_50_slim.*', args.model_dir):
-                    input = g.get_tensor_by_name("input:0")
-                    output = g.get_tensor_by_name(
-                        "resnet_v1_50/predictions/Softmax:0")
-                elif re.match('.*resnet_v1_101_slim.*', args.model_dir):
-                    input = g.get_tensor_by_name("input:0")
-                    output = g.get_tensor_by_name(
-                        "resnet_v1_101/predictions/Softmax:0")
-                elif re.match('.*resnet_v1_152_slim.*', args.model_dir):
-                    input = g.get_tensor_by_name("input:0")
-                    output = g.get_tensor_by_name(
-                        "resnet_v1_152/predictions/Softmax:0")
-                elif re.match('.*inception_v1_bn_slim.*', args.model_dir):
-                    input = g.get_tensor_by_name("input:0")
-                    output = g.get_tensor_by_name(
-                        "InceptionV1/Logits/Predictions/Softmax:0")
-                elif re.match('.*inception_v2_slim.*', args.model_dir):
-                    input = g.get_tensor_by_name("input:0")
-                    output = g.get_tensor_by_name(
-                        "InceptionV2/Predictions/Softmax:0")
-                elif re.match('.*inception_v3_slim.*', args.model_dir):
-                    input = g.get_tensor_by_name("input:0")
-                    output = g.get_tensor_by_name(
-                        "InceptionV3/Predictions/Softmax:0")
-                elif re.match('.*inception_v4_slim.*', args.model_dir):
-                    input = g.get_tensor_by_name("input:0")
-                    output = g.get_tensor_by_name(
-                        "InceptionV4/Logits/Predictions:0")
-                elif re.match('.*mobilenet_v1_slim.*', args.model_dir):
-                    input = g.get_tensor_by_name("input:0")
-                    output = g.get_tensor_by_name(
-                        "MobilenetV1/Predictions/Softmax:0")
-                elif re.match('.*mobilenet_v2_slim.*', args.model_dir):
-                    input = g.get_tensor_by_name("input:0")
-                    output = g.get_tensor_by_name(
-                        "MobilenetV2/Predictions/Softmax:0")
-                elif re.match('.*vgg16_slim.*', args.model_dir):
-                    input = g.get_tensor_by_name("input:0")
-                    output = g.get_tensor_by_name("vgg_16/fc8/squeezed:0")
-                elif re.match('.*vgg19_slim.*', args.model_dir):
-                    input = g.get_tensor_by_name("input:0")
-                    output = g.get_tensor_by_name("vgg_19/fc8/squeezed:0")
-                elif re.match('.*darknet19.*', args.model_dir):
-                    input = g.get_tensor_by_name("darknet19/net1:0")
-                    output = g.get_tensor_by_name(
-                        "darknet19/softmax1/Softmax:0")
-                elif re.match('.*inception_v1_bn_keras.*', args.model_dir):
-                    input = g.get_tensor_by_name("input_1:0")
-                    output = g.get_tensor_by_name("Predictions/Softmax:0")
-                elif re.match('.*resnet_v1p5_50_keras.*', args.model_dir):
-                    input = g.get_tensor_by_name("input_1:0")
-                    output = g.get_tensor_by_name("activation_49/Softmax:0")
-                elif re.match('.*resnet_v1p5_50_estimator.*', args.model_dir):
-                    input = g.get_tensor_by_name("input:0")
-                    output = g.get_tensor_by_name("resnet_model/Softmax:0")
-                elif re.match('.*caffe2tf.*', args.model_dir):
-                    input = g.get_tensor_by_name("input:0")
-                    output = g.get_tensor_by_name("prob:0")
-                else:
-                    raise ValueError("Model input/outputs unknown!")
-
-                # Meters to keep track of validation progress
-                batch_time = im_utils.AverageMeter()
-                top1 = im_utils.AverageMeter()
-                top5 = im_utils.AverageMeter()
-
-                _, preds_top_5 = tf.nn.top_k(output, k=5, sorted=True)
-                features, labels, _ = im_utils.dataset_input_fn(
-                    val_filenames, args.model_dir, args.image_size, args.batch_size, num_threads, shuffle=False, num_epochs=1, is_training=False)
-
-                i = 0
-                end = time.time()
-                while True:
+            # 2) Load from .ckpt and .pb
+            elif ckpt and tf.io.gfile.exists(ckpt_path+'.index') and tf.io.gfile.exists(args.model_dir) and \
+                    re.match(".*.pb", args.model_dir):
+                print("load data 2")
+                print("Loading model from '{}'".format(args.model_dir))
+                print("Loading weights from '{}'".format(ckpt_path))
+                graph_def = tf.compat.v1.GraphDef()
+                with tf.io.gfile.GFile(args.model_dir, 'rb') as f:
+                    graph_def.ParseFromString(f.read())
+                tf.import_graph_def(graph_def, name='')
+                var_list = {}
+                reader = tf.compat.v1.train.NewReader(ckpt_path)
+                for key in reader.get_variable_to_shape_map():
+                    # Look for all variables in ckpt that are used by the graph
                     try:
-                        input_features, input_labels = sess.run(
-                            [features, labels])
-                    except tf.errors.OutOfRangeError:
-                        break
+                        tensor = sess.graph.get_tensor_by_name(key + ":0")
+                    except KeyError:
+                        # This tensor doesn't exist in the graph (for example it's
+                        # 'global_step' or a similar housekeeping element) so skip it.
+                        continue
+                    var_list[key] = tensor
+                saver = tf.compat.v1.train.Saver(var_list=var_list)
+                saver.restore(sess, ckpt_path)
 
-                    all_preds, preds_5 = sess.run(
-                        [output, preds_top_5], {input: input_features})
+            # 3) Load from .ckpt and .meta
+            elif ckpt and tf.io.gfile.exists(ckpt_path+'.index') and tf.io.gfile.exists(meta_path):
+                print("load data 3")
+                print("Loading model from '{}'".format(meta_path))
+                print("Loading weights from '{}'".format(ckpt_path))
+                new_saver = tf.compat.v1.train.import_meta_graph(
+                    meta_path, clear_devices=True)
+                new_saver.restore(sess, ckpt_path)
 
-                    # Indices for the 1000 classes run from 0 - 999, thus
-                    # we subtract 1 from the labels (which run from 1 - 1000)
-                    # to match with the predictions. This is not needed with
-                    # when the background class is present (1001 classes)
-                    if all_preds.shape[1] == 1000:
-                        input_labels -= 1
+            # 4) Load from saved_model.pb and variables
+            elif tf.saved_model.loader.maybe_saved_model_directory(args.model_dir) and \
+                    tf.io.gfile.exists(saved_model_path) and tf.io.gfile.exists(saved_model_var_path):
+                print("load data 4")
+                print("Loading model from '{}'".format(saved_model_path))
+                print("Loading weights from '{}'".format(
+                    saved_model_var_path))
+                tf.saved_model.loader.load(sess,
+                                           [tf.saved_model.tag_constants.SERVING],
+                                           args.model_dir)
 
-                    # Map predicted labels synset ordering between ILSVRC and darknet
-                    if re.match('.*darknet19.*', args.model_dir):
-                        input_labels = im_utils.map_darknet_labels(
-                            input_labels, 'ilsvrc2darknet')
+            else:
+                raise ValueError("No model found!")
 
-                    acc1, acc5 = im_utils.accuracy(
-                        preds_5, input_labels, topk=(1, 5))
-                    batch_size = input_labels.shape[0]
+            g = tf.compat.v1.get_default_graph()
 
-                    top1.update(acc1, batch_size)
-                    top5.update(acc5, batch_size)
+            if re.match('.*resnet_v1_50_slim.*', args.model_dir):
+                input = g.get_tensor_by_name("input:0")
+                output = g.get_tensor_by_name(
+                    "resnet_v1_50/predictions/Softmax:0")
+            elif re.match('.*resnet_v1_101_slim.*', args.model_dir):
+                input = g.get_tensor_by_name("input:0")
+                output = g.get_tensor_by_name(
+                    "resnet_v1_101/predictions/Softmax:0")
+            elif re.match('.*resnet_v1_152_slim.*', args.model_dir):
+                input = g.get_tensor_by_name("input:0")
+                output = g.get_tensor_by_name(
+                    "resnet_v1_152/predictions/Softmax:0")
+            elif re.match('.*inception_v1_bn_slim.*', args.model_dir):
+                input = g.get_tensor_by_name("input:0")
+                output = g.get_tensor_by_name(
+                    "InceptionV1/Logits/Predictions/Softmax:0")
+            elif re.match('.*inception_v2_slim.*', args.model_dir):
+                input = g.get_tensor_by_name("input:0")
+                output = g.get_tensor_by_name(
+                    "InceptionV2/Predictions/Softmax:0")
+            elif re.match('.*inception_v3_slim.*', args.model_dir):
+                input = g.get_tensor_by_name("input:0")
+                output = g.get_tensor_by_name(
+                    "InceptionV3/Predictions/Softmax:0")
+            elif re.match('.*inception_v4_slim.*', args.model_dir):
+                input = g.get_tensor_by_name("input:0")
+                output = g.get_tensor_by_name(
+                    "InceptionV4/Logits/Predictions:0")
+            elif re.match('.*mobilenet_v1_slim.*', args.model_dir):
+                input = g.get_tensor_by_name("input:0")
+                output = g.get_tensor_by_name(
+                    "MobilenetV1/Predictions/Softmax:0")
+            elif re.match('.*mobilenet_v2_slim.*', args.model_dir):
+                input = g.get_tensor_by_name("input:0")
+                output = g.get_tensor_by_name(
+                    "MobilenetV2/Predictions/Softmax:0")
+            elif re.match('.*vgg16_slim.*', args.model_dir):
+                input = g.get_tensor_by_name("input:0")
+                output = g.get_tensor_by_name("vgg_16/fc8/squeezed:0")
+            elif re.match('.*vgg19_slim.*', args.model_dir):
+                input = g.get_tensor_by_name("input:0")
+                output = g.get_tensor_by_name("vgg_19/fc8/squeezed:0")
+            elif re.match('.*darknet19.*', args.model_dir):
+                input = g.get_tensor_by_name("darknet19/net1:0")
+                output = g.get_tensor_by_name(
+                    "darknet19/softmax1/Softmax:0")
+            elif re.match('.*inception_v1_bn_keras.*', args.model_dir):
+                input = g.get_tensor_by_name("input_1:0")
+                output = g.get_tensor_by_name("Predictions/Softmax:0")
+            elif re.match('.*resnet_v1p5_50_keras.*', args.model_dir):
+                input = g.get_tensor_by_name("input_1:0")
+                output = g.get_tensor_by_name("activation_49/Softmax:0")
+            elif re.match('.*resnet_v1p5_50_estimator.*', args.model_dir):
+                input = g.get_tensor_by_name("input:0")
+                output = g.get_tensor_by_name("resnet_model/Softmax:0")
+            elif re.match('.*caffe2tf.*', args.model_dir):
+                input = g.get_tensor_by_name("input:0")
+                output = g.get_tensor_by_name("prob:0")
+            else:
+                raise ValueError("Model input/outputs unknown!")
 
-                    batch_time.update(time.time() - end)
-                    end = time.time()
+            # Meters to keep track of validation progress
+            batch_time = im_utils.AverageMeter()
+            top1 = im_utils.AverageMeter()
+            top5 = im_utils.AverageMeter()
 
-                    print('\rVal:\t[{step:6d}/{total:6d}]\t'
-                          'Time {batch_time.val:7.3f} ({batch_time.avg:7.3f})\t'
-                          'Prec@1 {top1.val:7.3f} ({top1.avg:7.3f})\t'
-                          'Prec@5 {top5.val:7.3f} ({top5.avg:7.3f})'.format(
-                              step=i, total=num_val_batches_per_epoch, batch_time=batch_time,
-                              top1=top1, top5=top5), end='')
-                    if i % print_freq == 0:
-                        print('')
+            _, preds_top_5 = tf.nn.top_k(output, k=5, sorted=True)
+            features, labels, _ = im_utils.dataset_input_fn(
+                val_filenames, args.model_dir, args.image_size, args.batch_size, num_threads, shuffle=False, num_epochs=1, is_training=False)
 
-                    i += 1
+            i = 0
+            end = time.time()
+            while True:
+                try:
+                    input_features, input_labels = sess.run(
+                        [features, labels])
+                except tf.errors.OutOfRangeError:
+                    break
 
-                result = "model_dir={} prec@1={:.3f} prec@5={:.3f}".format(
-                    args.model_dir, top1.avg, top5.avg)
-                print('\n', result)
-                with open('pretrained_results.txt', 'a') as f:
-                    f.write(result + '\n')
+                all_preds, preds_5 = sess.run(
+                    [output, preds_top_5], {input: input_features})
+
+                # Indices for the 1000 classes run from 0 - 999, thus
+                # we subtract 1 from the labels (which run from 1 - 1000)
+                # to match with the predictions. This is not needed with
+                # when the background class is present (1001 classes)
+                if all_preds.shape[1] == 1000:
+                    input_labels -= 1
+
+                # Map predicted labels synset ordering between ILSVRC and darknet
+                if re.match('.*darknet19.*', args.model_dir):
+                    input_labels = im_utils.map_darknet_labels(
+                        input_labels, 'ilsvrc2darknet')
+
+                acc1, acc5 = im_utils.accuracy(
+                    preds_5, input_labels, topk=(1, 5))
+                batch_size = input_labels.shape[0]
+
+                top1.update(acc1, batch_size)
+                top5.update(acc5, batch_size)
+
+                batch_time.update(time.time() - end)
+                end = time.time()
+
+                print('\rVal:\t[{step:6d}/{total:6d}]\t'
+                      'Time {batch_time.val:7.3f} ({batch_time.avg:7.3f})\t'
+                      'Prec@1 {top1.val:7.3f} ({top1.avg:7.3f})\t'
+                      'Prec@5 {top5.val:7.3f} ({top5.avg:7.3f})'.format(
+                          step=i, total=num_val_batches_per_epoch, batch_time=batch_time,
+                          top1=top1, top5=top5), end='')
+                if i % print_freq == 0:
+                    print('')
+
+                i += 1
+
+            result = "model_dir={} prec@1={:.3f} prec@5={:.3f}".format(
+                args.model_dir, top1.avg, top5.avg)
+            print('\n', result)
+            with open('pretrained_results.txt', 'a') as f:
+                f.write(result + '\n')
 
 
 def main():
